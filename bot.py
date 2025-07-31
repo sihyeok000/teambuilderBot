@@ -37,24 +37,19 @@ def get_lol_data_from_sheet():
         current_category = ""
 
         for row in all_settings_values[1:]:
-            if len(row) < 3:
-                continue
+            if len(row) < 3: continue
             category_cell, key_cell, value_cell = row[0], row[1], row[2]
 
-            if category_cell.strip():
-                current_category = category_cell.strip()
+            if category_cell.strip(): current_category = category_cell.strip()
             
             if key_cell.strip() and value_cell.strip():
                 key = key_cell.strip()
                 try:
                     value = float(value_cell.strip()) 
-                except ValueError:
-                    continue
+                except ValueError: continue
 
-                if current_category == "티어점수":
-                    tier_scores[key] = value
-                elif current_category == "포지션가중치":
-                    position_weights[key] = value
+                if current_category == "티어점수": tier_scores[key] = value
+                elif current_category == "포지션가중치": position_weights[key] = value
 
         player_db_sheet = spreadsheet.worksheet("플레이어_DB")
         player_db = player_db_sheet.get_all_records()
@@ -64,16 +59,17 @@ def get_lol_data_from_sheet():
         print(f"시트 데이터 로딩 오류: {e}")
         return None, None, None
 
-def balance_teams(player_names, tier_scores, position_weights, player_db):
-    """주어진 10명의 플레이어 이름으로 최적의 팀 밸런스를 맞춥니다."""
+def balance_teams(grouped_players, solo_players, tier_scores, position_weights, player_db):
+    """그룹 플레이어와 솔로 플레이어를 받아 최적의 팀 밸런스를 맞춥니다."""
     
     positions = ['탑', '정글', '미드', '원딜', '서폿']
-    
-    participants = [p for p in player_db if p.get('이름') in player_names]
+    all_player_names = grouped_players + solo_players
+
+    participants = [p for p in player_db if p.get('이름') in all_player_names]
     
     if len(participants) != 10:
         found_names = {p['이름'] for p in participants}
-        missing_names = set(player_names) - found_names
+        missing_names = set(all_player_names) - found_names
         return None, f"다음 플레이어를 DB에서 찾을 수 없습니다: {', '.join(missing_names)}"
 
     score_matrix = {}
@@ -92,22 +88,31 @@ def balance_teams(player_names, tier_scores, position_weights, player_db):
     best_combination = []
     min_score_diff = float('inf')
     
-    player_indices = list(range(10))
-    for team_a_indices in itertools.combinations(player_indices, 5):
-        team_b_indices = list(set(player_indices) - set(team_a_indices))
+    # ✨ 수정된 부분: 조합 로직 변경
+    # 그룹을 채워 5명으로 만들 나머지 인원 수 계산
+    needed_for_group = 5 - len(grouped_players)
+    
+    # 솔로 플레이어 중에서 나머지 인원을 뽑는 모든 조합 생성
+    for extra_players_tuple in itertools.combinations(solo_players, needed_for_group):
+        extra_players = list(extra_players_tuple)
         
-        team_a_players = [participants[i] for i in team_a_indices]
-        team_b_players = [participants[i] for i in team_b_indices]
+        # A팀, B팀 멤버 확정
+        team_a_names = grouped_players + extra_players
+        team_b_names = list(set(solo_players) - set(extra_players))
+        
+        team_a_participants = [p for p in participants if p['이름'] in team_a_names]
+        team_b_participants = [p for p in participants if p['이름'] in team_b_names]
 
-        cost_matrix_a = np.array([[-score_matrix[p['이름']][pos] for pos in positions] for p in team_a_players])
+        # 이후 점수 계산 로직은 동일
+        cost_matrix_a = np.array([[-score_matrix[p['이름']][pos] for pos in positions] for p in team_a_participants])
         row_ind_a, col_ind_a = linear_sum_assignment(cost_matrix_a)
         team_a_score = -cost_matrix_a[row_ind_a, col_ind_a].sum()
-        team_a_assignment = {team_a_players[i]['이름']: positions[j] for i, j in zip(row_ind_a, col_ind_a)}
+        team_a_assignment = {team_a_participants[i]['이름']: positions[j] for i, j in zip(row_ind_a, col_ind_a)}
 
-        cost_matrix_b = np.array([[-score_matrix[p['이름']][pos] for pos in positions] for p in team_b_players])
+        cost_matrix_b = np.array([[-score_matrix[p['이름']][pos] for pos in positions] for p in team_b_participants])
         row_ind_b, col_ind_b = linear_sum_assignment(cost_matrix_b)
         team_b_score = -cost_matrix_b[row_ind_b, col_ind_b].sum()
-        team_b_assignment = {team_b_players[i]['이름']: positions[j] for i, j in zip(row_ind_b, col_ind_b)}
+        team_b_assignment = {team_b_participants[i]['이름']: positions[j] for i, j in zip(row_ind_b, col_ind_b)}
         
         score_diff = abs(team_a_score - team_b_score)
 
@@ -147,15 +152,29 @@ async def on_ready():
 @app.command(aliases=['도움말'])
 async def help(ctx):
     embed = discord.Embed(title="📜 팀 빌딩 봇 도움말", description="팀 구성을 위한 명령어 목록입니다.", color=0x5865F2)
-    embed.add_field(name="$team [이름1] [이름2] ... [이름10]", value="참가할 플레이어 10명의 이름을 입력하여 팀을 구성합니다.\n(이름에 띄어쓰기가 있다면 \"따옴표\"로 감싸주세요)", inline=False)
+    embed.add_field(name="$team [이름1] [이름2] ...", value="참가할 플레이어 10명의 이름을 입력하여 팀을 구성합니다.\n- 같이할 플레이어는 `+`로 묶어주세요 (예: `이름1+이름2`)\n- 이름에 띄어쓰기가 있다면 `\"따옴표\"`로 감싸주세요", inline=False)
     embed.set_footer(text="문의사항은 관리자에게 연락해주세요.")
     await ctx.send(embed=embed)
 
 
 @app.command()
-async def team(ctx, *player_names):
-    if len(player_names) != 10:
-        await ctx.send("💥 팀을 구성하려면 10명의 플레이어 **이름**이 필요합니다! (예: `$team 이름1 이름2 ... 이름10`)")
+async def team(ctx, *player_inputs):
+    # ✨ 수정된 부분: 명령어 파싱 로직 추가
+    grouped_players = []
+    solo_players = []
+    for p_input in player_inputs:
+        if '+' in p_input:
+            grouped_players.extend(p_input.split('+'))
+        else:
+            solo_players.append(p_input)
+    
+    total_players = len(grouped_players) + len(solo_players)
+    if total_players != 10:
+        await ctx.send(f"💥 팀을 구성하려면 10명의 플레이어 이름이 필요합니다! (현재 {total_players}명)")
+        return
+        
+    if len(grouped_players) > 4:
+        await ctx.send("💥 한 팀에 속할 그룹은 최대 4명까지 지정할 수 있습니다!")
         return
 
     await ctx.send("🤔 최적의 팀 조합을 계산하고 있습니다. 잠시만 기다려주세요...")
@@ -165,7 +184,8 @@ async def team(ctx, *player_names):
         await ctx.send("😵 구글 시트에서 데이터를 가져오는 데 실패했습니다. 설정을 확인해주세요.")
         return
 
-    result, message = balance_teams(player_names, tier_scores, position_weights, player_db)
+    # balance_teams 함수에 그룹/솔로 플레이어 명단을 전달
+    result, message = balance_teams(grouped_players, solo_players, tier_scores, position_weights, player_db)
 
     if not result:
         await ctx.send(f"😥 팀 구성에 실패했습니다! 이유: {message}")
@@ -174,22 +194,20 @@ async def team(ctx, *player_names):
     team_a = result['team_a']
     team_b = result['team_b']
     
-    if team_a['score'] > team_b['score']:
-        blue_team, red_team = team_a, team_b
-        blue_name, red_name = "A팀", "B팀"
-    else:
+    # 그룹 멤버가 항상 A팀에 오도록 보장
+    if any(p in team_b['players'] for p in grouped_players):
         blue_team, red_team = team_b, team_a
         blue_name, red_name = "B팀", "A팀"
+    else:
+        blue_team, red_team = team_a, team_b
+        blue_name, red_name = "A팀", "B팀"
 
     embed = discord.Embed(title="⚔️ 팀 빌딩 결과 ⚔️", color=0x3498DB)
     
     position_order = ['탑', '정글', '미드', '원딜', '서폿']
 
     def create_team_text(team_data):
-        """팀 데이터를 받아 포지션 순서로 정렬된 텍스트를 생성합니다."""
-        # 포지션을 키로, 플레이어 이름을 값으로 하는 딕셔너리를 만듭니다.
         players_by_pos = {data['position']: name for name, data in team_data['players'].items()}
-        
         text = ""
         for pos in position_order:
             player_name = players_by_pos.get(pos)
