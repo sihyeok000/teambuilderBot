@@ -181,3 +181,4 @@ cython_debug/
 .cursorindexingignore
 
 service_account.json
+memo.txt
