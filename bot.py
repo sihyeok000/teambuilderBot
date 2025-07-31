@@ -29,12 +29,41 @@ def get_lol_data_from_sheet():
         gc = gspread.service_account(filename='service_account.json')
         spreadsheet = gc.open("리그오브레전드 팀 구성")
         
+        # ✨ 수정된 부분: 설정 시트를 더 안정적으로 읽도록 로직 변경
         settings_sheet = spreadsheet.worksheet("설정")
-        settings_data = settings_sheet.get_all_records()
-        
-        tier_scores = {str(item['키']).strip(): item['값'] for item in settings_data if item['설정명'] == '티어점수'}
-        position_weights = {str(item['키']).strip(): item['값'] for item in settings_data if item['설정명'] == '포지션가중치'}
-        
+        # get_all_values()로 모든 데이터를 리스트로 가져옴
+        all_settings_values = settings_sheet.get_all_values()
+
+        tier_scores = {}
+        position_weights = {}
+        current_category = ""
+
+        # 첫 행(헤더)을 제외하고 한 줄씩 읽음
+        for row in all_settings_values[1:]:
+            # 행에 데이터가 충분한지 확인
+            if len(row) < 3:
+                continue
+
+            category_cell, key_cell, value_cell = row[0], row[1], row[2]
+
+            # A열에 새로운 카테고리 이름이 있으면 업데이트
+            if category_cell.strip():
+                current_category = category_cell.strip()
+            
+            # B, C열에 키와 값이 모두 있어야 처리
+            if key_cell.strip() and value_cell.strip():
+                key = key_cell.strip()
+                try:
+                    # 값은 숫자로 변환
+                    value = float(value_cell.strip()) 
+                except ValueError:
+                    continue # 값이 숫자가 아니면 건너뜀
+
+                if current_category == "티어점수":
+                    tier_scores[key] = value
+                elif current_category == "포지션가중치":
+                    position_weights[key] = value
+
         player_db_sheet = spreadsheet.worksheet("플레이어_DB")
         player_db = player_db_sheet.get_all_records()
         
@@ -55,29 +84,12 @@ def balance_teams(player_names, tier_scores, position_weights, player_db):
         missing_names = set(player_names) - found_names
         return None, f"다음 플레이어를 DB에서 찾을 수 없습니다: {', '.join(missing_names)}"
 
-    # ==================================================================
-    # ✨ 디버깅 코드 시작
-    # ==================================================================
-    print("\n\n--- [디버깅] 환산점수 계산 과정 시작 ---")
-    print(f"참가자 목록: {[p['이름'] for p in participants]}")
-    print(f"찾은 티어 점수 설정: {tier_scores}")
-    # ==================================================================
-
     score_matrix = {}
     for player in participants:
         player_name = player['이름']
-        
         player_tier_str = str(player.get('티어', '')).strip()
         tier_score = tier_scores.get(player_tier_str, 0)
         
-        # ==================================================================
-        # ✨ 디버깅 코드
-        # ==================================================================
-        print(f"\n[플레이어: {player_name}]")
-        print(f"  - 시트에서 읽은 티어: '{player_tier_str}'")
-        print(f"  - 매칭된 티어 점수: {tier_score}")
-        # ==================================================================
-
         score_matrix[player_name] = {}
         for pos in positions:
             proficiency = player.get(pos, 1)
@@ -85,18 +97,6 @@ def balance_teams(player_names, tier_scores, position_weights, player_db):
             calculated_score = tier_score * (1 + (proficiency - 1) * weight)
             score_matrix[player_name][pos] = calculated_score
             
-            # ==================================================================
-            # ✨ 디버깅 코드
-            # ==================================================================
-            print(f"    -> {pos:2s} 숙련도({proficiency}) | 최종 점수: {calculated_score:.2f}")
-            # ==================================================================
-
-    # ==================================================================
-    # ✨ 디버깅 코드 종료
-    # ==================================================================
-    print("--- [디버깅] 환산점수 계산 완료 ---\n\n")
-    # ==================================================================
-
     best_combination = []
     min_score_diff = float('inf')
     
@@ -163,7 +163,7 @@ async def help(ctx):
 @app.command()
 async def team(ctx, *player_names):
     if len(player_names) != 10:
-        await ctx.send("� 팀을 구성하려면 10명의 플레이어 **이름**이 필요합니다! (예: `$team 이름1 이름2 ... 이름10`)")
+        await ctx.send("💥 팀을 구성하려면 10명의 플레이어 **이름**이 필요합니다! (예: `$team 이름1 이름2 ... 이름10`)")
         return
 
     await ctx.send("🤔 최적의 팀 조합을 계산하고 있습니다. 잠시만 기다려주세요...")
