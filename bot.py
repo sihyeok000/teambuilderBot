@@ -183,7 +183,6 @@ async def team(ctx, *player_names):
 
     embed = discord.Embed(title="⚔️ 팀 빌딩 결과 ⚔️", color=0x3498DB)
     
-    # ✨ 수정된 부분: 포지션 순서대로 정렬하여 출력
     position_order = ['탑', '정글', '미드', '원딜', '서폿']
 
     def create_team_text(team_data):
