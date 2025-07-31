@@ -29,35 +29,27 @@ def get_lol_data_from_sheet():
         gc = gspread.service_account(filename='service_account.json')
         spreadsheet = gc.open("리그오브레전드 팀 구성")
         
-        # ✨ 수정된 부분: 설정 시트를 더 안정적으로 읽도록 로직 변경
         settings_sheet = spreadsheet.worksheet("설정")
-        # get_all_values()로 모든 데이터를 리스트로 가져옴
         all_settings_values = settings_sheet.get_all_values()
 
         tier_scores = {}
         position_weights = {}
         current_category = ""
 
-        # 첫 행(헤더)을 제외하고 한 줄씩 읽음
         for row in all_settings_values[1:]:
-            # 행에 데이터가 충분한지 확인
             if len(row) < 3:
                 continue
-
             category_cell, key_cell, value_cell = row[0], row[1], row[2]
 
-            # A열에 새로운 카테고리 이름이 있으면 업데이트
             if category_cell.strip():
                 current_category = category_cell.strip()
             
-            # B, C열에 키와 값이 모두 있어야 처리
             if key_cell.strip() and value_cell.strip():
                 key = key_cell.strip()
                 try:
-                    # 값은 숫자로 변환
                     value = float(value_cell.strip()) 
                 except ValueError:
-                    continue # 값이 숫자가 아니면 건너뜀
+                    continue
 
                 if current_category == "티어점수":
                     tier_scores[key] = value
@@ -191,14 +183,26 @@ async def team(ctx, *player_names):
 
     embed = discord.Embed(title="⚔️ 팀 빌딩 결과 ⚔️", color=0x3498DB)
     
-    blue_team_text = ""
-    for name, data in blue_team['players'].items():
-        blue_team_text += f"**{data['position']}**: {name} ({data['score']:.1f}점)\n"
+    # ✨ 수정된 부분: 포지션 순서대로 정렬하여 출력
+    position_order = ['탑', '정글', '미드', '원딜', '서폿']
+
+    def create_team_text(team_data):
+        """팀 데이터를 받아 포지션 순서로 정렬된 텍스트를 생성합니다."""
+        # 포지션을 키로, 플레이어 이름을 값으로 하는 딕셔너리를 만듭니다.
+        players_by_pos = {data['position']: name for name, data in team_data['players'].items()}
+        
+        text = ""
+        for pos in position_order:
+            player_name = players_by_pos.get(pos)
+            if player_name:
+                player_data = team_data['players'][player_name]
+                text += f"**{pos}**: {player_name} ({player_data['score']:.1f}점)\n"
+        return text
+
+    blue_team_text = create_team_text(blue_team)
     embed.add_field(name=f"🔵 {blue_name} (총점: {blue_team['score']:.1f})", value=blue_team_text, inline=True)
 
-    red_team_text = ""
-    for name, data in red_team['players'].items():
-        red_team_text += f"**{data['position']}**: {name} ({data['score']:.1f}점)\n"
+    red_team_text = create_team_text(red_team)
     embed.add_field(name=f"🔴 {red_name} (총점: {red_team['score']:.1f})", value=red_team_text, inline=True)
     
     score_diff = abs(blue_team['score'] - red_team['score'])
