@@ -9,6 +9,7 @@ import os
 from dotenv import load_dotenv
 from urllib import parse
 import requests
+import json
 
 # .env 파일에서 환경 변수 로드
 load_dotenv(dotenv_path="./.env")
@@ -21,49 +22,32 @@ app = commands.Bot(command_prefix='$', help_command=None, intents=intents)
 
 ### League of Legends ###
 
-
 request_header = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Accept-Language": "ko,en-US;q=0.9,en;q=0.8,es;q=0.7",
-    "Accept-Charset": "application/x-www-form-urlencoded; charset=UTF-8",
-    "Origin": "https://developer.riotgames.com",
-    "X-Riot-Token": os.getenv('riot_api_key')
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                    "Accept-Language": "ko,en-US;q=0.9,en;q=0.8,es;q=0.7",
+                    "Accept-Charset": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "Origin": "https://developer.riotgames.com",
+                    "X-Riot-Token": os.getenv('riot_api_key')
 }
 
-# ✨ API 요청 함수 개선 (오류 처리 강화)
-def safe_request(url, headers):
-    """API에 안전하게 요청을 보내고 상태 코드를 확인합니다."""
+# --- API 요청 함수 ---
+def safe_request(url):
+    """API에 안전하게 요청을 보내고 결과를 반환합니다."""
     try:
-        response = requests.get(url, headers=headers)
-        # 성공적인 요청(200)이 아니면, 상태 코드와 함께 오류 정보를 반환
-        if response.status_code != 200:
+        response = requests.get(url, headers=request_header)
+        if response.status_code == 200:
+            return {'error': False, 'data': response.json()}
+        else:
             return {'error': True, 'status_code': response.status_code, 'data': response.json()}
-        return {'error': False, 'data': response.json()}
     except requests.exceptions.RequestException as e:
-        # 네트워크 오류 등 요청 자체에 문제가 있을 경우
         return {'error': True, 'status_code': -1, 'message': str(e)}
 
-
 def getNameTag(summonerName):
-    splitted_name = summonerName.split('#')
-    if len(splitted_name) == 2 and splitted_name[1]:
-        gameName, tagLine = splitted_name
-    else:
-        gameName = summonerName
-        tagLine = "KR1"
-    return gameName, tagLine
-
-def get_PUUID(gameName, tagLine):
-    api_url = f"https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{parse.quote(gameName)}/{parse.quote(tagLine)}"
-    return safe_request(api_url, request_header)
-
-def get_summonerinfo_by_puuid(puuid):
-    api_url = f"https://kr.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}"
-    return safe_request(api_url, request_header)
-
-def get_league_info_by_summoner_id(summoner_id):
-    api_url = f"https://kr.api.riotgames.com/lol/league/v4/entries/by-summoner/{summoner_id}"
-    return safe_request(api_url, request_header)
+    """입력된 소환사 이름을 이름과 태그로 분리합니다."""
+    parts = summonerName.split('#')
+    if len(parts) == 2 and parts[1]:
+        return parts[0], parts[1]
+    return parts[0], "KR1" # 태그가 없으면 KR1을 기본값으로 사용
 
 # 티어별 색상 코드
 rank_color = {
@@ -161,93 +145,89 @@ async def help(ctx):
     await ctx.send(embed=embed)
 
 # ----------------------------------------------------------------
-# ✨ 수정된 롤 전적 검색 명령어
+# ✨ 최종 수정된 롤 전적 검색 명령어
 # ----------------------------------------------------------------
 @app.command(aliases=['l', '롤'])
 async def lol(ctx, *, summoner_name: str):
     msg = await ctx.send(embed=discord.Embed(description=f"🔍 **{summoner_name}** 님의 정보를 검색하고 있습니다...", color=0x5865F2))
 
     def create_error_embed(title, description):
-        """오류 메시지를 Embed 형식으로 생성합니다."""
         return discord.Embed(title=f"오류: {title}", description=description, color=0xE74C3C)
 
     try:
+        # 1. 닉네임/태그 분리 및 PUUID 조회
         gameName, tagLine = getNameTag(summoner_name)
+        account_url = f"https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{parse.quote(gameName)}/{parse.quote(tagLine)}"
+        account_res = safe_request(account_url)
 
-        # 1. PUUID 조회 및 오류 처리
-        account_res = get_PUUID(gameName, tagLine)
-        if account_res['error']:
-            status = account_res['status_code']
+        if account_res.get('error'):
+            status = account_res.get('status_code')
             if status == 403:
-                embed = create_error_embed("API 키 오류", "Riot API 키가 만료되었거나 잘못되었습니다.\n개발자 포털에서 키를 갱신하고 봇을 재시작해주세요.")
+                embed = create_error_embed("API 키 오류", "Riot API 키가 만료되었거나 잘못되었습니다.")
             elif status == 404:
-                embed = create_error_embed("소환사 없음", f"**'{summoner_name}'** 소환사를 찾을 수 없습니다.\n`이름#태그` 형식으로 정확히 입력했는지 확인해주세요.")
+                embed = create_error_embed("소환사 없음", f"**'{summoner_name}'** 소환사를 찾을 수 없습니다.")
             else:
-                embed = create_error_embed("계정 조회 실패", f"Riot API에서 계정 정보를 가져오는 데 실패했습니다. (상태 코드: {status})")
+                embed = create_error_embed("계정 조회 실패", f"API 요청에 실패했습니다. (상태 코드: {status})")
             await msg.edit(embed=embed); return
         
-        puuid = account_res['data']['puuid']
+        puuid = account_res['data'].get('puuid')
+        if not puuid:
+            await msg.edit(embed=create_error_embed("API 응답 오류", "PUUID를 찾을 수 없습니다.")); return
 
-        # 2. 소환사 정보 조회 및 오류 처리
-        summoner_res = get_summonerinfo_by_puuid(puuid)
-        if summoner_res['error']:
-            status = summoner_res['status_code']
-            if status == 403: # PUUID 조회 후 여기서 403이 뜨는 경우는 드물지만, 안전장치로 추가
-                embed = create_error_embed("API 키 오류", "Riot API 키가 만료되었거나 잘못되었습니다.\n개발자 포털에서 키를 갱신하고 봇을 재시작해주세요.")
-            else:
-                embed = create_error_embed("소환사 정보 조회 실패", f"Riot API에서 소환사 정보를 불러오는 데 실패했습니다. (상태 코드: {status})")
-            await msg.edit(embed=embed); return
+        # 2. 소환사 정보 조회 (아이콘, 레벨)
+        summoner_url = f"https://kr.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}"
+        summoner_res = safe_request(summoner_url)
+        if summoner_res.get('error'):
+            await msg.edit(embed=create_error_embed("소환사 정보 조회 실패", "소환사의 레벨과 아이콘 정보를 가져오지 못했습니다.")); return
 
-        summoner_info = summoner_res['data']
-        summoner_id = summoner_info['id']
-        summoner_level = summoner_info['summonerLevel']
-        profile_icon_id = summoner_info['profileIconId']
+        summoner_level = summoner_res['data'].get('summonerLevel', 'N/A')
+        profile_icon_id = summoner_res['data'].get('profileIconId', 0)
 
         # 3. 랭크 정보 조회
-        league_res = get_league_info_by_summoner_id(summoner_id)
-        if league_res['error']: # 랭크 정보는 실패해도 다른 정보는 보여주도록 처리
-            rank_info_list = []
-            print(f"랭크 정보 조회 실패 (ID: {summoner_id}, Status: {league_res.get('status_code')})")
-        else:
+        league_url = f"https://kr.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}"
+        league_res = safe_request(league_url)
+        rank_info_list = []
+        if not league_res.get('error'):
             rank_info_list = league_res['data']
 
-        # DDragon 최신 버전 가져오기
+        # 4. DDragon 최신 버전 및 아이콘 URL 설정
         try:
             versions = requests.get("https://ddragon.leagueoflegends.com/api/versions.json").json()
             latest_version = versions[0]
         except Exception:
             latest_version = "14.15.1" # 실패 시 대체 버전
-
         icon_url = f"https://ddragon.leagueoflegends.com/cdn/{latest_version}/img/profileicon/{profile_icon_id}.png"
 
-        # 결과 Embed 생성
-        solo_rank_info = next((r for r in rank_info_list if r.get('queueType') == 'RANKED_SOLO_5x5'), None)
-        flex_rank_info = next((r for r in rank_info_list if r.get('queueType') == 'RANKED_FLEX_SR'), None)
+        # 5. 최종 Embed 생성
+        solo_rank = next((r for r in rank_info_list if r.get('queueType') == 'RANKED_SOLO_5x5'), None)
+        flex_rank = next((r for r in rank_info_list if r.get('queueType') == 'RANKED_FLEX_SR'), None)
         
-        embed_color = rank_color.get(solo_rank_info.get('tier') if solo_rank_info else (flex_rank_info.get('tier') if flex_rank_info else 'IRON'), 0x5865F2)
-        embed = discord.Embed(title=f"{gameName}#{tagLine}", description=f"**레벨:** {summoner_level}", color=embed_color)
+        main_tier = (solo_rank or flex_rank or {}).get('tier', 'IRON')
+        embed_color = rank_color.get(main_tier, 0x5865F2)
+
+        embed = discord.Embed(title=f"{gameName} #{tagLine}", description=f"**레벨:** {summoner_level}", color=embed_color)
         embed.set_thumbnail(url=icon_url)
 
-        if solo_rank_info:
-            tier, rank, lp, wins, losses = solo_rank_info['tier'], solo_rank_info['rank'], solo_rank_info['leaguePoints'], solo_rank_info['wins'], solo_rank_info['losses']
-            win_rate = round((wins / (wins + losses)) * 100) if (wins + losses) > 0 else 0
-            embed.add_field(name="솔로랭크", value=f"**{tier} {rank}** ({lp} LP)\n{wins}승 {losses}패 ({win_rate}%)", inline=True)
-        else:
-            embed.add_field(name="솔로랭크", value="Unranked", inline=True)
+        # 랭크 정보 필드 추가 함수
+        def add_rank_field(rank_data, queue_name):
+            if rank_data:
+                tier, rank, lp = rank_data['tier'], rank_data['rank'], rank_data['leaguePoints']
+                wins, losses = rank_data['wins'], rank_data['losses']
+                win_rate = round((wins / (wins + losses)) * 100) if (wins + losses) > 0 else 0
+                value = f"**{tier} {rank}** - {lp} LP\n{wins}승 {losses}패 ({win_rate}%)"
+                embed.add_field(name=queue_name, value=value, inline=True)
+            else:
+                embed.add_field(name=queue_name, value="Unranked", inline=True)
 
-        if flex_rank_info:
-            tier, rank, lp, wins, losses = flex_rank_info['tier'], flex_rank_info['rank'], flex_rank_info['leaguePoints'], flex_rank_info['wins'], flex_rank_info['losses']
-            win_rate = round((wins / (wins + losses)) * 100) if (wins + losses) > 0 else 0
-            embed.add_field(name="자유랭크", value=f"**{tier} {rank}** ({lp} LP)\n{wins}승 {losses}패 ({win_rate}%)", inline=True)
-        else:
-            embed.add_field(name="자유랭크", value="Unranked", inline=True)
+        add_rank_field(solo_rank, "솔로랭크")
+        add_rank_field(flex_rank, "자유랭크")
         
         embed.set_footer(text="Powered by Riot Games API")
-        await msg.edit(embed=embed)
+        await msg.edit(content=None, embed=embed)
 
     except Exception as e:
         print(f"[$lol 명령어 오류] {e}")
-        await msg.edit(embed=create_error_embed("알 수 없는 오류", "명령어 처리 중 내부 오류가 발생했습니다. 봇 관리자에게 문의해주세요."))
+        await msg.edit(embed=create_error_embed("알 수 없는 오류", "명령어 처리 중 내부 오류가 발생했습니다."))
 
 
 @app.command()
@@ -292,12 +272,9 @@ async def team(ctx, *player_inputs):
 
 # 봇 실행
 try:
-    if not os.getenv('discord_key'):
-        print("오류: 디스코드 봇 토큰이 .env 파일에 설정되지 않았습니다.")
-    elif not os.getenv('riot_api_key'):
-        print("오류: Riot API 키가 .env 파일에 설정되지 않았습니다.")
+    if not os.getenv('discord_key') or not os.getenv('riot_api_key'):
+        print("오류: .env 파일에 discord_key 또는 riot_api_key가 설정되지 않았습니다.")
     else:
         app.run(os.getenv('discord_key'))
 except Exception as e:
     print(f"봇 실행 중 오류 발생: {e}")
-
