@@ -7,6 +7,8 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 import os
 from dotenv import load_dotenv
+from urllib import parse
+import requests
 
 # .env 파일에서 환경 변수 로드
 load_dotenv(dotenv_path="./.env")
@@ -15,6 +17,67 @@ load_dotenv(dotenv_path="./.env")
 intents = discord.Intents.default()
 intents.message_content = True
 app = commands.Bot(command_prefix='$', help_command=None, intents=intents)
+
+
+### League of Legends ###
+
+
+request_header = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                    "Accept-Language": "ko,en-US;q=0.9,en;q=0.8,es;q=0.7",
+                    "Accept-Charset": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "Origin": "https://developer.riotgames.com",
+                    "X-Riot-Token": os.getenv('riot_api_key')
+                }
+
+def getNameTag(summonerName):
+    splitted_name = summonerName.split('#')
+    if len(splitted_name) == 2:
+        gameName, tagLine = splitted_name
+    else:
+        gameName = summonerName
+        tagLine = "KR1"
+
+    return gameName, tagLine
+
+def get_PUUID(gameName, tagLine):
+    gameName = parse.quote(gameName)
+    tagLine = parse.quote(tagLine)
+    
+    url = "https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{}/{}".format(gameName, tagLine)
+    return requests.get(url, headers=request_header).json()
+
+def get_summonerinfo_by_puuid(puuid):
+    url = "https://kr.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/"+puuid
+    return requests.get(url, headers=request_header).json()
+
+
+def league_v4_summoner_league(summoner_id):
+    url = "https://kr.api.riotgames.com/lol/league/v4/entries/by-summoner/"+summoner_id
+    return requests.get(url, headers=request_header).json()
+
+def queueTypeCheck(queueType):
+    if queueType=="RANKED_FLEX_SR":
+        return "자유랭크"
+    elif queueType=="RANKED_SOLO_5x5":
+        return "솔로랭크"
+    else:
+        return queueType
+
+rank_color = {
+    'IRON' : 0x413530,
+    'BRONZE' : 0x6B463C,
+    'SILVER' : 0x8396A0,
+    'GOLD' : 0xBB9660,
+    'PLATINUM' : 0x5CB9AE,
+    'EMERALD' : 0x035B36,
+    'DIAMOND' : 0x265BAB,
+    'MASTER' : 0xB84EF1,
+    'GRANDMASTER' : 0xBA1B1B,
+    'CHALLENGER' : 0xD7FAFA 
+}
+
+#########################
 
 
 # ----------------------------------------------------------------
@@ -153,10 +216,72 @@ async def on_ready():
 async def help(ctx):
     embed = discord.Embed(title="📜 팀 빌딩 봇 도움말", description="팀 구성을 위한 명령어 목록입니다.", color=0x5865F2)
     embed.add_field(name="$team [이름1] [이름2] ...", value="참가할 플레이어 10명의 이름을 입력하여 팀을 구성합니다.\n- 같이할 플레이어는 `+`로 묶어주세요 (예: `이름1+이름2`)\n- 이름에 띄어쓰기가 있다면 `\"따옴표\"`로 감싸주세요", inline=False)
-    embed.set_footer(text="문의사항은 관리자에게 연락해주세요.")
+    embed.add_field(name="$lol [닉네임#태그]", value="롤 티어를 검색합니다.", inline=False)
+    embed.set_footer(text="문의사항은 관리자에게 연락해주세요. https://github.com/sihyeok000/teambuilderBot")
     await ctx.send(embed=embed)
 
+@app.command(aliases = ['l','롤'])
+async def lol(ctx, arg):
+    embed=discord.Embed(title="League of Legends 전적검색[KR]", color=0x000000)
+    error_occured = False
+    
+    #### Search Riot Id ####
+    try:
+        gameName, tagLine = getNameTag(arg)
+        puuid = get_PUUID(gameName, tagLine).get('puuid')
 
+        summoner_info = get_summonerinfo_by_puuid(puuid)
+
+        summoner_id = summoner_info.get('id')
+        prev_name = summoner_info.get('name')
+        summonerLevel = summoner_info.get('summonerLevel')
+        profileIconId = summoner_info.get('profileIconId')
+    
+    except:
+        embed.add_field(name = arg, value="소환사 이름이 없습니다. 띄어쓰기 없이 [Name#Tag]와 같이 입력해주세요.", inline=False)
+        error_occured = True
+    
+    ### Error occurred while searching Riot ID.
+    if not error_occured:
+        #### Load Rank info ####
+        try:
+            summoner_rank = league_v4_summoner_league(summoner_id)
+            tier = summoner_rank[0].get('tier')
+            rank = summoner_rank[0].get('rank')
+            wins = summoner_rank[0].get('wins')
+            losses = summoner_rank[0].get('losses')
+            leaguePoints = summoner_rank[0].get('leaguePoints')
+            queueType = summoner_rank[0].get('queueType')
+            queueType = queueTypeCheck(queueType)
+            
+            embed.color = rank_color[tier]
+            embed.add_field(name="{}#{} (prev.{}) Lv.{}".format(gameName, tagLine, prev_name, summonerLevel),
+                    value="{} {} {} {}P\n{}승 {}패".format(queueType, tier, rank, leaguePoints, wins, losses),
+                    inline=False)
+            
+        except:
+            embed.add_field(name = "{}#{} (prev.{}) Lv.{}".format(gameName, tagLine, prev_name, summonerLevel), 
+                            value="unranked", inline=False)
+        
+        
+        #### Thumbnail Setting ####
+        
+        icon_url = "https://ddragon.leagueoflegends.com/cdn/10.18.1/img/profileicon/{}.png".format(profileIconId)
+        
+        try:
+            response = requests.get(icon_url)
+            response.raise_for_status()
+            embed.set_thumbnail(url = icon_url)
+        
+        except:
+            icon_url = "https://ddragon.leagueoflegends.com/cdn/10.18.1/img/profileicon/6.png"
+            embed.set_thumbnail(url = icon_url)
+        
+    
+    #### Result ####
+    await ctx.send(embed=embed)
+    
+    
 @app.command()
 async def team(ctx, *player_inputs):
     # ✨ 수정된 부분: 명령어 파싱 로직 추가
