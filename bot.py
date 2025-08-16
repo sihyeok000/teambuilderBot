@@ -117,9 +117,18 @@ def balance_teams(grouped_players, solo_players, tier_scores, position_weights, 
         tier_score = tier_scores.get(str(player.get('티어', '')).strip(), 0)
         score_matrix[player_name] = {}
         for pos in positions:
-            proficiency = player.get(pos, 1)
-            weight = position_weights.get(pos, 0.5)
-            score_matrix[player_name][pos] = tier_score * (1 + (proficiency - 1) * weight)
+            # player.get(pos, 1) -> 빈칸일 경우 1을 기본값으로 사용
+            proficiency = player.get(pos, 1) 
+            
+            # 숙련도가 0이면 환산점수를 무조건 0으로 만듭니다.
+            if proficiency == 0:
+                calculated_score = 0
+            # 숙련도가 0이 아니면 기존 공식대로 계산합니다.
+            else:
+                weight = position_weights.get(pos, 0.5)
+                calculated_score = tier_score * (1 + (proficiency - 1) * weight)
+            
+            score_matrix[player_name][pos] = calculated_score
 
     # 최적의 팀 조합 찾기
     best_combination, min_score_diff = [], float('inf')
